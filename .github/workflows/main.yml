@@ -1,0 +1,76 @@
+name: Build SukiSU Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      CPU:
+        description: "SoC 平台代号，例如 sm8650"
+        required: true
+        default: "sm8650"
+      FEIL:
+        description: "Manifest 文件名（不加 .xml 后缀）"
+        required: true
+        default: "pineapple_14"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 准备工作区
+        run: mkdir -p $GITHUB_WORKSPACE/kernel_workspace
+
+      - name: 安装 repo 工具
+        run: |
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+          chmod a+x ~/repo
+          sudo mv ~/repo /usr/local/bin/repo
+
+      - name: 初始化 repo 并同步源码
+        working-directory: ${{ github.workspace }}/kernel_workspace
+        run: |
+          repo init -u https://github.com/OnePlusOSS/kernel_manifest.git \
+                    -b refs/heads/oneplus/${{ github.event.inputs.CPU }} \
+                    -m ${{ github.event.inputs.FEIL }}.xml --depth=1
+          repo sync -c --force-sync
+
+          # 移除 GKI ABI 保护配置，兼容 SUSFS
+          if [ -e kernel_platform/common/BUILD.bazel ]; then
+            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' kernel_platform/common/BUILD.bazel
+          fi
+          if [ -e kernel_platform/msm-kernel/BUILD.bazel ]; then
+            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' kernel_platform/msm-kernel/BUILD.bazel
+          fi
+          rm -f kernel_platform/common/android/abi_gki_protected_exports_* || true
+          rm -f kernel_platform/msm-kernel/android/abi_gki_protected_exports_* || true
+
+      - name: 克隆编译工具链（Proton Clang）
+        run: |
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang $GITHUB_WORKSPACE/proton-clang
+
+      - name: 编译内核
+        working-directory: ${{ github.workspace }}/kernel_workspace
+        run: |
+          export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+
+          cd kernel_platform/msm-kernel
+          make O=out ARCH=arm64 vendor/pineapple_defconfig
+          make -j$(nproc) O=out ARCH=arm64 CC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE
+
+      - name: 克隆 AnyKernel3 并打包内核
+        run: |
+          git clone https://github.com/ShirkNeko/AnyKernel3 -b master AnyKernel3
+          cp $GITHUB_WORKSPACE/kernel_workspace/kernel_platform/msm-kernel/out/arch/arm64/boot/Image AnyKernel3/
+          cd AnyKernel3
+          zip -r9 ../SukiSU-Ace3V.zip *
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v3
+        with:
+          name: SukiSU-Ace3V-ZIP
+          path: SukiSU-Ace3V.zip
