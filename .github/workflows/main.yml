@@ -70,7 +70,7 @@ jobs:
           zip -r9 ../SukiSU-Ace3V.zip *
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: SukiSU-Ace3V-ZIP
           path: SukiSU-Ace3V.zip
